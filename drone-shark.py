@@ -10,7 +10,10 @@
 ######################################################################################
 
 import sys
+import struct
+import socket
 import copy
+
 from lairdrone import drone_models as models
 from lairdrone import helper
 
@@ -27,7 +30,7 @@ except ImportError:
 		import urllib
 		import subprocess
 		import os
-
+		
 		urllib.urlretrieve('https://bootstrap.pypa.io/get-pip.py', 'get-pip.py')
 		subprocess.check_output('python ./get-pip.py', shell=True)
 		os.remove('./get-pip.py')
@@ -41,42 +44,70 @@ def startCapture(interface='eth0', timeout=60):
 	cap.sniff(timeout)
 	return cap
 
-def dissectPackets(listOfPackets):
-	for packet in listOfPackets:
-		host_dict = copy.deepcopy(models.host_model)
-		host_dict['alive'] = True
-		port_dict = copy.deepcopy(models.port_model)
+def parseData(host, port, pkt):
+	if port['protocol'] == 'tcp':
+		pass
+	elif port['protocol'] == 'udp':
+		pass
+	elif port['protocol'] == 'icmp':
+		pass
+
+	return host, port
+
+def parse():
+	for packet in startCapture(interface='eth0', timeout=60):
+		hostSrc = copy.deepcopy(models.host_model)
+		hostDst = copy.deepcopy(models.host_model)
+		hostSrc['alive'] = True
+		hostDst['alive'] = True
 		
-		if not packet[1]._layer_name == 'ip':
-		    continue	
+		portSrc = copy.deepcopy(models.port_model)
+		portDst = copy.deepcopy(models.port_model)
 		
-		try:
-			data = packet[3]
-		except:
-			data = None
+		hostSrc['mac_addr'] = packet[0].src
+		hostDst['mac_addr'] = packet[0].dst
+			
+		if packet[1]._layer_name in ['ip', 'ipv6']:		
+			hostSrc['string_addr'] = packet[1].src_host
+			hostDst['string_addr'] = packet[1].dst_host
+			if packet[1]._layer_name == 'ip':
+				hostSrc['long_addr'] = struct.unpack("!L", socket.inet_aton(hostSrc['string_addr']))[0]
+				hostDst['long_addr'] = struct.unpack("!L", socket.inet_aton(hostDst['string_addr']))[0]
+			portSrc['protocol'] = packet[2]._layer_name
+			portDst['protocol'] = packet[2]._layer_name
+			portSrc['port'] = int(packet[2].srcport)
+			portDst['port'] = int(packet[2].dstport)
+			portSrc['alive'] = True
+			portDst['alive'] = True
+			portSrc['service'] = socket.getservbyport(portSrc['port'])
+			portDst['service'] = socket.getservbyport(portDst['port'])
+			
+			try:
+				data = packet[3]
+			except:
+				data = None
+			
+			(hostSrc, portSrc) = parseData(hostSrc, portSrc, packet)
+			(hostDst, portDst) = parseData(hostDst, portDst, packet)
+		elif packet[1]._layer_name == 'arp':
+			hostSrc['string_addr'] = packet[1].src_proto_ipv4
+			hostDst['string_addr'] = packet[1].dst_proto_ipv4
+			hostSrc['long_addr'] = struct.unpack("!L", socket.inet_aton(hostSrc['string_addr']))[0]
+			hostDst['long_addr'] = struct.unpack("!L", socket.inet_aton(hostDst['string_addr']))[0]
+		else:
+			'''Don't know what packet it is'''
+			print packet[1]._layer_name
+			continue
 		
-		if packet[1].proto == 6:
-			port_dict['protocol'] = 'tcp'
-		elif packet[1].proto == 17:
-			port_dict['protocol'] = 'udp'
-		elif packet[1].proto == 13:
-			port_dict['protocol'] = 'icmp'
-		
-		port_dict['port'] = int(packet[2].srcport)
-		port_dict['alive'] = True
-		host_dict['string_addr'] = packet[1].src_host
-		host_dict['mac_addr'] = packet[0].src
-		host_dict['ports'].append(port_dict)
-		project_dict['hosts'].append(host_dict)
-		
+		hostSrc['ports'].append(portSrc)
+		hostDst['ports'].append(portDst)
+		project['hosts'].append(hostSrc)
+		project['hosts'].append(hostDst)
 
 
 if __name__ == '__main__':
-	project_dict = copy.deepcopy(models.project_model)
-	project_dict['project_id'] = 'test'  #need to get this to pull from somewhere
-	command_dict = copy.deepcopy(models.command_model)
-	command_dict['tool'] = TOOL
-	
-	cap = startCapture()
-	dissectPackets(cap)
-	pprint.pprint(project_dict)
+	project = copy.deepcopy(models.project_model)
+	project['project_id'] = 'test'  #need to get this to pull from somewhere
+	command = copy.deepcopy(models.command_model)
+	command['tool'] = TOOL
+	parse()
