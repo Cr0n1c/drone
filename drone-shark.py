@@ -2,7 +2,7 @@
 ######################################################################################
 ##
 ##    Program: drone-shark
-##    Version: 0.1
+##    Version: 1.0
 ##    Developer: Brandon Helms
 ##    Notes:  Requires pyShark, but if not installed will install it for you.  This
 ##       will pull a running capture and parse the data and ship to LAIR as needed.
@@ -12,6 +12,8 @@
 import sys
 import struct
 import socket
+import string
+import re
 import copy
 
 from lairdrone import drone_models as models
@@ -46,27 +48,44 @@ def startCapture(interface='eth0', timeout=60):
 
 def parseData(host, port, pkt):
 	if port['protocol'] == 'tcp':
-		pass
+		if 'http' in dir(pkt):
+			if host['string_addr'] == pkt.ip.addr:
+				try:
+					host['os'].append(pkt.http.server)
+				except AttributeError:				
+					host['os'].append(pkt.http.useragent)
+			else:
+				host['hostname'].append(pkt.http.host)
 	elif port['protocol'] == 'udp':
-		pass
+		if 'smb' in dir(pkt) and 'browser' in dir(pkt):
+			if host['string_addr'] == pkt.nbdgm.src_ip:
+				host['os'].append(pkt.browser.os_major + '.' + pkt.browser.os_minor) 
+				host['hostname'].append(pkt.browser.server)
+				port['notes'].append(str(pkt.browser))
+				port['notes'].append(pkt.browser.comment)
+		elif 'snmp' in dir(pkt):
+			if pkt.udp.port == port['port'] and host['string_addr'] == pkt.ip.addr:
+				port['credentials'].append(pkt.snmp.community)
+				port['notes'].append(str(pkt.snmp))
 	elif port['protocol'] == 'icmp':
 		pass
-
 	return host, port
 
 def parse():
 	for packet in startCapture(interface='eth0', timeout=60):
 		hostSrc = copy.deepcopy(models.host_model)
-		hostDst = copy.deepcopy(models.host_model)
 		hostSrc['alive'] = True
-		hostDst['alive'] = True
+		hostSrc['last_modified_by'] = TOOL
+		hostDst = hostSrc
 		
 		portSrc = copy.deepcopy(models.port_model)
-		portDst = copy.deepcopy(models.port_model)
+		portSrc['last_modified_by'] = TOOL
+		portSrc['alive'] = True
+		portDst = portSrc
 		
 		hostSrc['mac_addr'] = packet[0].src
 		hostDst['mac_addr'] = packet[0].dst
-			
+		
 		if packet[1]._layer_name in ['ip', 'ipv6']:		
 			hostSrc['string_addr'] = packet[1].src_host
 			hostDst['string_addr'] = packet[1].dst_host
@@ -77,10 +96,14 @@ def parse():
 			portDst['protocol'] = packet[2]._layer_name
 			portSrc['port'] = int(packet[2].srcport)
 			portDst['port'] = int(packet[2].dstport)
-			portSrc['alive'] = True
-			portDst['alive'] = True
-			portSrc['service'] = socket.getservbyport(portSrc['port'])
-			portDst['service'] = socket.getservbyport(portDst['port'])
+			try:
+				portSrc['service'] = socket.getservbyport(portSrc['port'])
+			except socket.error:
+				pass
+			try:		
+				portDst['service'] = socket.getservbyport(portDst['port'])
+			except socket.error:
+				pass
 			
 			try:
 				data = packet[3]
