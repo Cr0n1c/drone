@@ -58,7 +58,7 @@ def parseData(host, port, pkt):
         @param port: port_dic from models
         @param pkt: tshark packet
     '''
-    appendPort = True
+    writeData = False
     
     os = copy.deepcopy(models.os_model)
     os['tool'] = TOOL
@@ -71,12 +71,15 @@ def parseData(host, port, pkt):
             if host['string_addr'] == pkt.ip.addr:
                 if 'host' in dir(pkt.http):
                     host['hostnames'].append(pkt.http.host)
+                    writeData = True
             else:
                 if 'user_agent' in dir(pkt.http):
                     os['fingerprint'] = pkt.http.user_agent
-                    appendPort = False
+                    port['port'] = 0
+                    writeData = True
                 if 'server' in dir(pkt.http):
                     os['fingerprint'] = pkt.http.server
+                    writeData = True
     elif port['protocol'] == 'udp':
         if 'smb' in dir(pkt) and 'browser' in dir(pkt):
             if host['string_addr'] == pkt.nbdgm.src_ip:
@@ -84,20 +87,24 @@ def parseData(host, port, pkt):
                 host['hostnames'].append(pkt.browser.server)
                 port['notes'].append(str(pkt.browser))
                 port['notes'].append(pkt.browser.comment)
+                writeData = True
         elif 'snmp' in dir(pkt):
             if pkt.udp.port == port['port'] and host['string_addr'] == pkt.ip.addr:
                 port['credentials'].append(pkt.snmp.community)
                 port['notes'].append(str(pkt.snmp))
+                writeData = True
     elif port['protocol'] == 'icmp':
         appendPort = False
     
+    
+    host['ports'].append(port)
+    
     if os['fingerprint'] is not None:
         host['os'].append(os)
-    if appendPort:
-        host['ports'].append(port)
-    
-    return host
-
+    if writeData:
+        return host
+    else:
+        return False
 
 def parse():
     ''' This is my main function '''
@@ -150,10 +157,17 @@ def parse():
                     portDst['service'] = socket.getservbyport(portDst['port'])
                 except socket.error:
                     pass
-
-            hostList.append(parseData(hostSrc, portSrc, packet))
-            hostList.append(parseData(hostDst, portDst, packet))
+            hostSrc = parseData(hostSrc, portSrc, packet)
+            hostDst = parseData(hostDst, portSrc, packet)
+            
+            if hostSrc:
+                hostList.append(hostSrc)
+            if hostDst:
+                hostList.append(hostDst)
+                
         elif packet[1]._layer_name == 'arp':
+            pass
+            '''Until I find a need for the data, I am not going to worry about it
             hostSrc['string_addr'] = packet[1].src_proto_ipv4
             hostDst['string_addr'] = packet[1].dst_proto_ipv4
             hostSrc['long_addr'] = struct.unpack("!L", socket.inet_aton(hostSrc['string_addr']))[0]
@@ -167,9 +181,7 @@ def parse():
 
             hostList.append(hostSrc)
             hostList.append(hostDst)
-        else:
-            '''Don't know what packet it is or I dont care'''
-            pass
+            '''
 
     for host in hostList:
         project['hosts'].append(host)
