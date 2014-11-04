@@ -21,6 +21,7 @@ from lairdrone import helper
 
 OS_WEIGHT = 50
 TOOL = 'tshark'
+VERSION = '0.0.1'
 
 #Downloading dependencies and making sure pyShark is installed.
 try:
@@ -41,14 +42,28 @@ except ImportError:
 
 
 def startCapture(interface='eth0', timeout=60, filter=''):
-    ''' Setup and starts capture based on interface, timeout and bpf_filter'''
+    ''' Setup and starts capture based on interface, timeout and bpf_filter
+        @param interface: interface to listen on, default is eth0
+        @param timeout: number of seconds to listen for
+        @param filter: bpf_filter not wireshark filter
+    '''
     cap = pyshark.LiveCapture(interface)
     cap.bpf_filter = filter
     cap.sniff(timeout)
     return cap
 
 def parseData(host, port, pkt):
-    ''' This is basically my filter function to pull out data I care about'''
+    ''' This is basically my filter function to pull out data I care about
+        @param host: host_dic from models
+        @param port: port_dic from models
+        @param pkt: tshark packet
+    '''
+    
+    os = copy.deepcopy(models.os_model)
+    os['tool'] = TOOL
+    os['weight'] = OS_WEIGHT
+    os['fingerprint'] = None
+    
     if port['protocol'] == 'tcp':
         if 'http' in dir(pkt):
             port['service'] = 'http'
@@ -57,13 +72,13 @@ def parseData(host, port, pkt):
                     host['hostnames'].append(pkt.http.host)
             else:
                 if 'user_agent' in dir(pkt.http):
-                    host['os'].append(pkt.http.user_agent)
+                    os['fingerprint'] = pkt.http.user_agent
                 if 'server' in dir(pkt.http):
-                    host['os'].append(pkt.http.server)
+                    os['fingerprint'] = pkt.http.server
     elif port['protocol'] == 'udp':
         if 'smb' in dir(pkt) and 'browser' in dir(pkt):
             if host['string_addr'] == pkt.nbdgm.src_ip:
-                host['os'].append(pkt.browser.os_major + '.' + pkt.browser.os_minor)
+                os['fingerprint'] = pkt.browser.os_major + '.' + pkt.browser.os_minor
                 host['hostnames'].append(pkt.browser.server)
                 port['notes'].append(str(pkt.browser))
                 port['notes'].append(pkt.browser.comment)
@@ -73,7 +88,9 @@ def parseData(host, port, pkt):
                 port['notes'].append(str(pkt.snmp))
     elif port['protocol'] == 'icmp':
         pass
-
+    
+    if os['fingerprint'] is not None:
+        host['os'].append(os)
     return host, port
 
 
@@ -159,25 +176,18 @@ def parse():
 
 
 if __name__ == '__main__':
-    '''
     usage = "usage: %prog <project_id> <timeout_in_secs> <bpf_filter(optional)> "
     description = "%prog runs tshark and ports data into Lair"
-
     parser = OptionParser(usage=usage, description=description,
-                          version="%prog 0.0.1")
-    parser.add_option(
-        "--include-informational",
-        dest="include_informational",
-        default=False,
-        action="store_true",
-        help="Forces informational plugins to be loaded"
-    )
+                          version="%prog %s" %VERSION)
+    
     (options, args) = parser.parse_args()
-    if len(args) != 3:
+    if len(args) == 2:
+        args.append('')
+    elif len(args) != 3:
         print parser.get_usage()
         sys.exit(1)
-    '''
-    args = ['test', 60, 'tcp port 80']
+    
     capture = startCapture(interface='eth0', timeout=int(args[1]), filter=args[2])
     project = copy.deepcopy(models.project_model)
     project['project_id'] = args[0]
@@ -185,14 +195,17 @@ if __name__ == '__main__':
     command = copy.deepcopy(models.command_model)
     command['tool'] = TOOL
     command['command'] = TOOL
+    
     for arg in capture.get_parameters():
         if ' ' in arg:
             command['command'] += ' "%s"' %arg
         else:
             command['command'] += ' %s' %arg
-
+    
+    project['commands'].append(command)
+    
     # Import data into LAIR
-    #db = api.db_connect()
+    db = api.db_connect()
     parse()
-    #api.save(project, db, TOOL)
-    #sys.exit(0)
+    api.save(project, db, TOOL)
+    sys.exit(0)
