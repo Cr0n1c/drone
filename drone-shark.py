@@ -58,6 +58,7 @@ def parseData(host, port, pkt):
         @param port: port_dic from models
         @param pkt: tshark packet
     '''
+    appendPort = True
     
     os = copy.deepcopy(models.os_model)
     os['tool'] = TOOL
@@ -73,6 +74,7 @@ def parseData(host, port, pkt):
             else:
                 if 'user_agent' in dir(pkt.http):
                     os['fingerprint'] = pkt.http.user_agent
+                    appendPort = False
                 if 'server' in dir(pkt.http):
                     os['fingerprint'] = pkt.http.server
     elif port['protocol'] == 'udp':
@@ -87,11 +89,14 @@ def parseData(host, port, pkt):
                 port['credentials'].append(pkt.snmp.community)
                 port['notes'].append(str(pkt.snmp))
     elif port['protocol'] == 'icmp':
-        pass
+        appendPort = False
     
     if os['fingerprint'] is not None:
         host['os'].append(os)
-    return host, port
+    if appendPort:
+        host['ports'].append(port)
+    
+    return host
 
 
 def parse():
@@ -131,26 +136,23 @@ def parse():
 
             portSrc['protocol'] = packet[2]._layer_name
             portDst['protocol'] = packet[2]._layer_name
-            portSrc['port'] = int(packet[2].srcport)
-            portDst['port'] = int(packet[2].dstport)
+            
+            if portSrc['protocol'] not in ['icmp', 'icmpv6']:
+                portSrc['port'] = int(packet[2].srcport)
+                portDst['port'] = int(packet[2].dstport)
+                    
+                try:
+                    portSrc['service'] = socket.getservbyport(portSrc['port'])
+                except socket.error:
+                    pass
+    
+                try:
+                    portDst['service'] = socket.getservbyport(portDst['port'])
+                except socket.error:
+                    pass
 
-            try:
-                portSrc['service'] = socket.getservbyport(portSrc['port'])
-            except socket.error:
-                pass
-
-            try:
-                portDst['service'] = socket.getservbyport(portDst['port'])
-            except socket.error:
-                pass
-
-            (hostSrc, portSrc) = parseData(hostSrc, portSrc, packet)
-            (hostDst, portDst) = parseData(hostDst, portDst, packet)
-            hostSrc['ports'].append(portSrc)
-            hostDst['ports'].append(portDst)
-            hostList.append(hostSrc)
-            hostList.append(hostDst)
-            continue
+            hostList.append(parseData(hostSrc, portSrc, packet))
+            hostList.append(parseData(hostDst, portDst, packet))
         elif packet[1]._layer_name == 'arp':
             hostSrc['string_addr'] = packet[1].src_proto_ipv4
             hostDst['string_addr'] = packet[1].dst_proto_ipv4
@@ -165,11 +167,9 @@ def parse():
 
             hostList.append(hostSrc)
             hostList.append(hostDst)
-            continue
         else:
-            '''Don't know what packet it is'''
-            print packet[1]._layer_name
-            continue
+            '''Don't know what packet it is or I dont care'''
+            pass
 
     for host in hostList:
         project['hosts'].append(host)
@@ -179,7 +179,7 @@ if __name__ == '__main__':
     usage = "usage: %prog <project_id> <timeout_in_secs> <bpf_filter(optional)> "
     description = "%prog runs tshark and ports data into Lair"
     parser = OptionParser(usage=usage, description=description,
-                          version="%prog %s" %VERSION)
+                          version="%prog " + VERSION)
     
     (options, args) = parser.parse_args()
     if len(args) == 2:
