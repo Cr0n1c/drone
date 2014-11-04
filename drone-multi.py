@@ -35,3 +35,4 @@ if __name__ == '__main__':
         else:
             print Fore.YELLOW + '[+] File: %s' %f + Fore.WHITE
             os.system('%s %s %s' %(pName, pid, f)) #was lazy, next version will use subprocess
+            
